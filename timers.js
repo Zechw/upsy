@@ -23,9 +23,10 @@
         this.startElevatorTimer(eNum, floorNum, reTime)
       })
       elevator.on('stopped_at_floor', (floorNum) => {
-        delete this.timers[this.elevatorTimerKey(eNum, floorNum)]
 				let bestFloor = this.getBestFloor(elevators, floors, eNum)
+				console.log(eNum, 'stopped at', floorNum, 'destined for', bestFloor)
 				this.setLights(elevator, bestFloor)
+        delete this.timers[this.elevatorTimerKey(eNum, floorNum)]
         if (elevator.goingUpIndicator()) {
           this.saveResidualTime(this.floorTimerKey(floorNum, 'up'))
           delete this.timers[this.floorTimerKey(floorNum, 'up')]
@@ -39,6 +40,11 @@
 
     for(let elevatorIndex = 0; elevatorIndex < elevators.length; elevatorIndex++) {
       let elevator = elevators[elevatorIndex]
+			elevator.on('stopped_at_floor', (floorNum) => {
+				setTimeout(() => {
+					this.goToBestFloor(elevators, floors, elevatorIndex)
+				}, 1)
+			})
       // elevator.on("idle", () => {
       //   this.goToBestFloor(elevators, floors, elevatorIndex)
       // })
@@ -70,10 +76,10 @@
       //   this.goToBestFloor(elevators, floors, elevatorIndex)
       // })
     }
-    for(let floor of floors) {
-      floor.on('up_button_pressed', () => {this.sendStagnantElevator(floor.floorNum)})
-      floor.on('down_button_pressed', () => {this.sendStagnantElevator(floor.floorNum)})
-    }
+    // for(let floor of floors) {
+    //   floor.on('up_button_pressed', () => {this.sendStagnantElevator(floor.floorNum)})
+    //   floor.on('down_button_pressed', () => {this.sendStagnantElevator(floor.floorNum)})
+    // }
   },
   update(dt, elevators, floors) {
 		// elevators = [elevators[0]] //ez mode for moveLimits
@@ -115,8 +121,9 @@
 	},
   goToBestFloor(elevators, floors, elevatorIndex) {
     bestFloor = this.getBestFloor(elevators, floors, elevatorIndex)
-    this.setLights(elevator, bestFloor)
     elevator.goToFloor(bestFloor)
+		this.setLights(elevator, bestFloor)
+		return bestFloor
   },
   getBestFloor(elevators, floors, elevatorIndex) {
     let elevatorScores = this.scoreFloors(elevators, floors)[elevatorIndex]
@@ -141,36 +148,42 @@
       let pressedFloors = elevator.getPressedFloors()
       for(let floor of floors) {
 				let upTime = this.getFloorTime(floor.floorNum(), 'up')
-				upTime *= (elevator.destinationDirection == 'up')? 1:0.8
+				// upTime *= (elevator.destinationDirection == 'up')? 1:0.8
 				let downTime = this.getFloorTime(floor.floorNum(), 'down')
-				downTime *= (elevator.destinationDirection == 'down')? 1:0.8
+				// downTime *= (elevator.destinationDirection == 'down')? 1:0.8
         let pickupValue = Math.max(upTime, downTime)
 				// pickupValue = upTime? 1:0 + downTime? 1:0 // override for max transportedPerSec
         let dropoffValue = this.getElevatorTime(elevatorIndex, floor.floorNum())
 
-				//distribute bias to space out elevator pickupPreference (everyOther)
-				if(elevatorIndex == floor.floorNum() % elevators.length){
-          pickupValue *= 1.2
-          pickupValue += 0.1
-        }
-				// spread evevators vertically
-				if(floor.floorNum() == Math.round(elevatorIndex*(floors.length/elevators.length))){
-					pickupValue *= 1.2
-					pickupValue += 0.1
-				}
+				//distribute bias to space out elevator pickupPreference (everyOther/stripe-ing)
+				// if(elevatorIndex == floor.floorNum() % elevators.length){
+        //   pickupValue *= 1.2
+        //   pickupValue += 0.1
+        // }
+				// // spread evevators vertically
+				// if(floor.floorNum() == Math.round(elevatorIndex*(floors.length/elevators.length))){
+				// 	pickupValue *= 1.2
+				// 	pickupValue += 0.1
+				// }
+				//TODO base this on positions of other elevators.
 
         //discount floor if someone is already on the way
         //TODO factor in elevator's direction
         for(let e of elevators){
-          if(e.destinationQueue.includes(floor.floorNum()) && e !== elevator){
-            pickupValue *= 0.7
+          if(
+						e.destinationQueue.includes(floor.floorNum())
+						&& e !== elevator
+						&& elevator.currentFloor() != floor.floorNum()
+						&& elevator.currentFloor() != elevator.destinationQueue[0]
+					){
+            pickupValue *= 0.8
           }
         }
 
-        let floorScore = (1*(1-load))*pickupValue + load*dropoffValue
+        let floorScore = (1.4*(1-load))*pickupValue + dropoffValue //load*dropoffValue
 
 				//value closer floors
-				// floorScore *= 1 / (Math.abs(elevator.currentFloor() - floor.floorNum()) + 1)
+				floorScore *= 1 / (Math.abs(elevator.currentFloor() - floor.floorNum()) + 1)
 
         floorScores.push(floorScore)
       }
