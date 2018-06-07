@@ -1,7 +1,8 @@
 {
-  async init(elevators, floors) {
+  init(elevators, floors) {
 		// elevators = [elevators[0]] //ez mode for moveLimits
     //register timers
+		this.timers = []
     for (let floor of floors) {
       floor.on('up_button_pressed', () => {
         this.startFloorTimer(floor.floorNum(), 'up')
@@ -15,15 +16,16 @@
       elevator.on('floor_button_pressed', (floorNum) => {
         let currentFloor = elevator.currentFloor()
         let wasUp = floorNum > currentFloor
-        let reTime = this.residualTime[this.floorTimerKey(currentFloor, (wasUp? 'up':'down'))]
-        delete this.residualTime[this.floorTimerKey(currentFloor, (wasUp? 'up':'down'))]
+				let key = this.floorTimerKey(currentFloor, (wasUp? 'up':'down'))
+        let reTime = this.residualTime[key]
+        delete this.residualTime[key]
         // console.log('residual', currentFloor, wasUp, reTime)
         this.startElevatorTimer(eNum, floorNum, reTime)
       })
       elevator.on('stopped_at_floor', (floorNum) => {
+        delete this.timers[this.elevatorTimerKey(eNum, floorNum)]
 				let bestFloor = this.getBestFloor(elevators, floors, eNum)
 				this.setLights(elevator, bestFloor)
-        delete this.timers[this.elevatorTimerKey(eNum, floorNum)]
         if (elevator.goingUpIndicator()) {
           this.saveResidualTime(this.floorTimerKey(floorNum, 'up'))
           delete this.timers[this.floorTimerKey(floorNum, 'up')]
@@ -41,26 +43,29 @@
       //   this.goToBestFloor(elevators, floors, elevatorIndex)
       // })
 			//
-      elevator.on('passing_floor', (floorNum, direction) => {
-				let isUp = direction == 'up'
-				elevator.goingUpIndicator(isUp)
-        elevator.goingDownIndicator(!isUp)
-        let someoneWantsUp = floors[floorNum].buttonStates.up == 'activated'
-        let someoneWantsDown = floors[floorNum].buttonStates.down == 'activated'
-        let someoneToPickup = (someoneWantsUp && isUp) || (someoneWantsDown && !isUp)
-        let maxElevatorTime = 0
-        for(let key in this.timers) {
-          if(key.includes('elevator'+elevatorIndex+'_') && this.timers[key] > maxElevatorTime) {
-            maxElevatorTime = this.timers[key]
-          }
-        }
-        if(
-          (someoneToPickup && elevator.loadFactor() < .7 && maxElevatorTime < 6)
-          || elevator.getPressedFloors().includes(floorNum)
-        ){
-          elevator.goToFloor(floorNum, true)
-        }
-      })
+
+      // elevator.on('passing_floor', (floorNum, direction) => {
+			// 	let isUp = direction == 'up'
+			// 	elevator.goingUpIndicator(isUp)
+      //   elevator.goingDownIndicator(!isUp)
+      //   let someoneWantsUp = floors[floorNum].buttonStates.up == 'activated'
+      //   let someoneWantsDown = floors[floorNum].buttonStates.down == 'activated'
+      //   let someoneToPickup = (someoneWantsUp && isUp) || (someoneWantsDown && !isUp)
+      //   let maxElevatorTime = 0
+      //   for(let key in this.timers) {
+      //     if(key.includes('elevator'+elevatorIndex+'_') && this.timers[key] > maxElevatorTime) {
+      //       maxElevatorTime = this.timers[key]
+      //     }
+      //   }
+      //   if(
+      //     (someoneToPickup && elevator.loadFactor() < .7 && maxElevatorTime < 6)
+      //     || elevator.getPressedFloors().includes(floorNum)
+      //   ){
+      //     elevator.goToFloor(floorNum, true)
+      //   }
+      // })
+
+
       // elevator.on('floor_button_pressed', (floorNum) => {
       //   this.goToBestFloor(elevators, floors, elevatorIndex)
       // })
@@ -76,7 +81,7 @@
     for(let elevatorIndex = 0; elevatorIndex < elevators.length; elevatorIndex++) {
       let elevator = elevators[elevatorIndex]
       bestFloor = this.getBestFloor(elevators, floors, elevatorIndex)
-			this.setLights(elevator, bestFloor)
+			// this.setLights(elevator, bestFloor)
       if(elevator.currentFloor() !== bestFloor
         && elevator.destinationQueue[0] !== bestFloor
       ) {
@@ -95,6 +100,8 @@
     }
   },
 	setLights(elevator, destination){
+		// elevator.goingUpIndicator(true)
+		// elevator.goingDownIndicator(true)
 		if(bestFloor > elevator.currentFloor()) {
       elevator.goingUpIndicator(true)
       elevator.goingDownIndicator(false)
@@ -134,35 +141,45 @@
       let pressedFloors = elevator.getPressedFloors()
       for(let floor of floors) {
 				let upTime = this.getFloorTime(floor.floorNum(), 'up')
+				upTime *= (elevator.destinationDirection == 'up')? 1:0.8
 				let downTime = this.getFloorTime(floor.floorNum(), 'down')
+				downTime *= (elevator.destinationDirection == 'down')? 1:0.8
         let pickupValue = Math.max(upTime, downTime)
 				// pickupValue = upTime? 1:0 + downTime? 1:0 // override for max transportedPerSec
         let dropoffValue = this.getElevatorTime(elevatorIndex, floor.floorNum())
 
-        //distribute bias to space out elevator pickupPreference (everyOther)
-        if(elevatorIndex == floor.floorNum() % elevators.length){
+				//distribute bias to space out elevator pickupPreference (everyOther)
+				if(elevatorIndex == floor.floorNum() % elevators.length){
           pickupValue *= 1.2
-          pickupValue += 0.01
+          pickupValue += 0.1
         }
+				// spread evevators vertically
+				if(floor.floorNum() == Math.round(elevatorIndex*(floors.length/elevators.length))){
+					pickupValue *= 1.2
+					pickupValue += 0.1
+				}
 
         //discount floor if someone is already on the way
         //TODO factor in elevator's direction
         for(let e of elevators){
           if(e.destinationQueue.includes(floor.floorNum()) && e !== elevator){
-            pickupValue *= 0.5
+            pickupValue *= 0.7
           }
         }
 
-        let floorScore = (0.6*(1-load))*pickupValue + load*dropoffValue
+        let floorScore = (1*(1-load))*pickupValue + load*dropoffValue
 
 				//value closer floors
-				floorScore *= 1 / (Math.abs(elevator.currentFloor() - floor.floorNum()) + 1)
+				// floorScore *= 1 / (Math.abs(elevator.currentFloor() - floor.floorNum()) + 1)
 
         floorScores.push(floorScore)
       }
+			//TODO leaky neighbors
+			for(let i = 0; i < floorScores.length; i++){
+
+			}
       // console.log('elevator', elevatorIndex, elevator.loadFactor(),
       //         'score', floorScores, 'max', floorScores.indexOf(Math.max(...floorScores)))
-      //TODO leaky neighbors
       elevatorScores.push(floorScores)
     }
     return elevatorScores
